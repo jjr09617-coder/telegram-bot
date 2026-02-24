@@ -1,38 +1,61 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 import os
+import stripe
+from flask import Flask, request
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("8350879750:AAHuMtnaerHNKwaqILXYRuziqTO0aIaPrDc")
+STRIPE_SECRET = os.getenv("sk_test_51T4EMc2SGL0sBacP7mIJ14WrFALFgCVzifIcGo955kDpj9u86w0uo5AxknQfj9kxKC4nT9aFO0uB3ucf1NQAdUnc00BMMC2wHZ")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+
+stripe.api_key = STRIPE_SECRET
+
+app = Flask(__name__)
+
+telegram_app = ApplicationBuilder().token(TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("📦 Pacote Básico - R$19,90", callback_data='pacote1')],
-        [InlineKeyboardButton("📦 Pacote Premium - R$39,90", callback_data='pacote2')],
-        [InlineKeyboardButton("💎 VIP - R$79,90", callback_data='vip')]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "🔥 Bem-vindo 🔥\nEscolha um pacote:",
-        reply_markup=reply_markup
+    checkout_session = stripe.checkout.Session.create(
+        payment_method_types=['card'],
+        line_items=[{
+            'price_data': {
+                'currency': 'brl',
+                'product_data': {
+                    'name': 'Acesso Premium',
+                },
+                'unit_amount': 1990,
+            },
+            'quantity': 1,
+        }],
+        mode='payment',
+        success_url='https://t.me/SEU_BOT_AQUI',
+        cancel_url='https://t.me/SEU_BOT_AQUI',
     )
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    textos = {
-        "pacote1": "Pacote Básico\nValor: R$19,90\n\nFaça o pagamento via Pix:\nSUA_CHAVE_AQUI",
-        "pacote2": "Pacote Premium\nValor: R$39,90\n\nFaça o pagamento via Pix:\nSUA_CHAVE_AQUI",
-        "vip": "VIP\nValor: R$79,90\n\nFaça o pagamento via Pix:\nSUA_CHAVE_AQUI"
-    }
+    await update.message.reply_text(
+        f"💳 Clique para pagar:\n{checkout_session.url}"
+    )
 
-    await query.edit_message_text(text=textos[query.data])
+telegram_app.add_handler(CommandHandler("start", start))
 
-app = ApplicationBuilder().token(TOKEN).build()
+@app.route('/webhook', methods=['POST'])
+def stripe_webhook():
+    payload = request.data
+    sig_header = request.headers.get('Stripe-Signature')
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button))
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, WEBHOOK_SECRET
+        )
+    except Exception:
+        return "Erro", 400
 
-app.run_polling()
+    if event['type'] == 'checkout.session.completed':
+        print("Pagamento confirmado!")
+
+    return "OK", 200
+
+if __name__ == "__main__":
+    import threading
+    threading.Thread(target=lambda: telegram_app.run_polling()).start()
+    app.run(host="0.0.0.0", port=10000)
